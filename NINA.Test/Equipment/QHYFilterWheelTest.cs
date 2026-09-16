@@ -11,7 +11,7 @@ namespace NINA.Test.Equipment {
     public class QHYFilterWheelTest {
         [Test]
         public void Position_WhenSdkReportsUnknownStatus_ReturnsMovingInsteadOfSlotZero() {
-            Mock<IQhySdk> sdk = CreateSdk("?");
+            Mock<IQhySdk> sdk = CreateSdk(() => "?");
             QHYFilterWheel wheel = CreateWheel(sdk);
 
             wheel.Position.Should().Be(-1);
@@ -20,7 +20,7 @@ namespace NINA.Test.Equipment {
         [Test]
         public void Position_WhenMoveIsRequested_ReportsMovingUntilDestinationIsObserved() {
             string status = "0";
-            Mock<IQhySdk> sdk = CreateSdk(status);
+            Mock<IQhySdk> sdk = CreateSdk(() => status);
             QHYFilterWheel wheel = CreateWheel(sdk);
 
             wheel.Position.Should().Be(0);
@@ -34,7 +34,7 @@ namespace NINA.Test.Equipment {
         [Test]
         public async Task Position_ConcurrentReads_DoNotCorruptMoveState() {
             string status = "0";
-            Mock<IQhySdk> sdk = CreateSdk(status);
+            Mock<IQhySdk> sdk = CreateSdk(() => status);
             QHYFilterWheel wheel = CreateWheel(sdk);
             wheel.Position = 1;
 
@@ -52,14 +52,14 @@ namespace NINA.Test.Equipment {
             return new QHYFilterWheel("camera", profileService.Object, sdk.Object);
         }
 
-        private static Mock<IQhySdk> CreateSdk(string status) {
+        private static Mock<IQhySdk> CreateSdk(Func<string> getStatus) {
             Mock<IQhySdk> sdk = new Mock<IQhySdk>();
             string model = "QHY";
             sdk.Setup(x => x.GetModel("camera", out model));
             sdk.Setup(x => x.IsCfwPlugged()).Returns(true);
             sdk.Setup(x => x.GetControlValue(QhySdk.CONTROL_ID.CONTROL_CFWSLOTSNUM)).Returns(7);
             sdk.Setup(x => x.GetCfwStatus(It.IsAny<byte[]>())).Callback<byte[]>(buffer => {
-                buffer[0] = Encoding.ASCII.GetBytes(status)[0];
+                buffer[0] = Encoding.ASCII.GetBytes(getStatus())[0];
             }).Returns(QhySdk.QHYCCD_SUCCESS);
             sdk.Setup(x => x.SendOrderToCfw(It.IsAny<string>(), It.IsAny<int>())).Returns(QhySdk.QHYCCD_SUCCESS);
             return sdk;
