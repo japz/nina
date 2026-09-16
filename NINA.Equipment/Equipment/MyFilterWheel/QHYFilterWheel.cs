@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -33,10 +33,12 @@ namespace NINA.Equipment.Equipment.MyFilterWheel {
         private readonly IProfileService profileService;
         private bool moveRequested = false;
         private string destinationPostition = string.Empty;
-        public IQhySdk Sdk { get; set; } = QhySdk.Instance;
+        private readonly object stateLock = new object();
+        public IQhySdk Sdk { get; set; }
 
-        public QHYFilterWheel(string fwheel, IProfileService profileService) {
+        public QHYFilterWheel(string fwheel, IProfileService profileService, IQhySdk sdk = null) {
             this.profileService = profileService;
+            Sdk = sdk ?? QhySdk.Instance;
 
             string FWheelId;
             var cameraModel = string.Empty;
@@ -105,52 +107,57 @@ namespace NINA.Equipment.Equipment.MyFilterWheel {
 
         public short Position {
             get {
-                uint rv;
-                byte[] status = new byte[1];
-                short position;
-                string statusString;
+                lock (stateLock) {
+                    byte[] status = new byte[1];
+                    uint rv = Sdk.GetCfwStatus(status);
+                    string statusString = Encoding.ASCII.GetString(status);
+                    Logger.Debug($"QHYCFW: CFW status rc={rv}, raw='{statusString}', destination='{destinationPostition}', requested={moveRequested}");
 
-                if ((rv = Sdk.GetCfwStatus(status)) != QhySdk.QHYCCD_SUCCESS) {
-                    Logger.Error($"QHYCFW: Failed to get filter wheel position: {rv}");
-                    return -1;
-                }
+                    if (rv != QhySdk.QHYCCD_SUCCESS) {
+                        Logger.Error($"QHYCFW: Failed to get filter wheel position: rc={rv}");
+                        return -1;
+                    }
 
-                statusString = string.Join("", Encoding.ASCII.GetChars(status));
-                Logger.Debug($"QHYCFW: Current position: {statusString}");
+                    // N and / are documented moving/initializing states. Unknown or out-of-range values are not slot 0.
+                    if (statusString == "N" || statusString == "/" || !TryParsePosition(statusString, out short position)) {
+                        return -1;
+                    }
 
-                /*
-                 * GetQHYCCDCFWStatus() can return the following status:
-                 * - CFW2, CFW3: ASCII 78 "N" while the filter wheel is in motion.
-                 * - A-Series cameras: ASCII 47 "/" file filter wheel is initializing, but the position number the wheel is at while it is moving
-                 * We return -1 while the filter wheel is moving, per the ASCOM specification
-                 */
-                if (statusString == "N" || statusString == "/" || (moveRequested && !statusString.Equals(destinationPostition))) {
-                    // The filter wheel is in motion
-                    position = -1;
-                } else {
-                    // The filter wheel is at a filter postition
+                    if (position < 0 || position >= Info.Positions || (moveRequested && !statusString.Equals(destinationPostition, StringComparison.OrdinalIgnoreCase))) {
+                        return -1;
+                    }
+
                     moveRequested = false;
                     destinationPostition = string.Empty;
-                    short.TryParse(statusString, out position);
+                    return position;
                 }
-
-                return position;
             }
             set {
-                string position = destinationPostition = value.ToString("X1");
-                moveRequested = true;
+                string destination = value.ToString("X1");
+                lock (stateLock) {
+                    moveRequested = true;
+                    destinationPostition = destination;
+                    Logger.Debug($"QHYCFW: Moving to position {value} (str: {destination})");
 
-                Logger.Debug($"QHYCFW: Moving to position {value} (str: {position})");
-
-                if (Sdk.SendOrderToCfw(position, position.Length) != QhySdk.QHYCCD_SUCCESS) {
-                    Logger.Error($"QHYCFW: Failed to order move to position {value} (str: {position})!");
-                    moveRequested = false;
-                    destinationPostition = string.Empty;
-                    return;
+                    uint rv = Sdk.SendOrderToCfw(destination, destination.Length);
+                    if (rv != QhySdk.QHYCCD_SUCCESS) {
+                        Logger.Error($"QHYCFW: Failed to order move to position {value} (str: {destination}), rc={rv}!");
+                        moveRequested = false;
+                        destinationPostition = string.Empty;
+                        return;
+                    }
                 }
 
                 RaisePropertyChanged();
             }
+        }
+
+        private static bool TryParsePosition(string status, out short position) {
+            if (short.TryParse(status, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out position)) {
+                return true;
+            }
+
+            return status.Length == 1 && short.TryParse(status, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out position);
         }
 
         public IList<string> SupportedActions => [];

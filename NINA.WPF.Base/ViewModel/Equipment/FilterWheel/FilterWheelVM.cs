@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -31,6 +31,7 @@ using NINA.WPF.Base.Interfaces.Mediator;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
@@ -39,13 +40,16 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
 
     public class FilterWheelVM : DockableVM, IFilterWheelVM {
         private DeviceUpdateTimer updateTimer;
+        private readonly TimeSpan filterChangeTimeout;
 
         public FilterWheelVM(IProfileService profileService,
                              IFilterWheelMediator filterWheelMediator,
                              IFocuserMediator focuserMediator,
                              IGuiderMediator guiderMediator,
                              IDeviceChooserVM filterWheelChooserVM,
-                             IApplicationStatusMediator applicationStatusMediator) : base(profileService) {
+                             IApplicationStatusMediator applicationStatusMediator,
+                             TimeSpan? filterChangeTimeout = null) : base(profileService) {
+            this.filterChangeTimeout = filterChangeTimeout ?? TimeSpan.FromMinutes(5);
             Title = Loc.Instance["LblFilterWheel"];
             ImageGeometry = (System.Windows.Media.GeometryGroup)System.Windows.Application.Current.Resources["FWSVG"];
             HasSettings = true;
@@ -124,9 +128,10 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
         public async Task<FilterInfo> ChangeFilter(FilterInfo inputFilter, CancellationToken token = new CancellationToken(), IProgress<ApplicationStatus> progress = null) {
             //Lock access so only one instance can change the filter
             await semaphoreSlim.WaitAsync(token);
+            Stopwatch changeTimer = Stopwatch.StartNew();
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            // Add a generous timeout of 5 minutes to filter changes - just to prevent the procedure being stuck
-            timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
+            // Keep the production timeout at five minutes; tests inject a bounded equivalent.
+            timeoutCts.CancelAfter(filterChangeTimeout);
             try {
                 if (FW?.Connected == true) {
                     var prevFilter = profileService.ActiveProfile.FilterWheelSettings.FilterWheelFilters.Where(x => x.Position == FilterWheelInfo.SelectedFilter?.Position).FirstOrDefault();
@@ -183,6 +188,8 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
 
                         await changeFilter;
 
+                        short finalPosition = FW?.Position ?? -1;
+                        Logger.Debug($"Filter wheel change completed: requested={filter.Position}, reported={finalPosition}, elapsed={changeTimer.ElapsedMilliseconds}ms");
                         if (activeGuidingStopped) {
                             var resumedGuiding = await this.guiderMediator.StartGuiding(false, progress, timeoutCts.Token);
                             if (resumedGuiding) {
@@ -193,8 +200,8 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
                             }
                         }
 
-                        if (FW?.Position != filter.Position) {
-                            Logger.Error($"Failed to move filter wheel to filter {filter.Name} at position {filter.Position}. Current reported position: {FW?.Position}");
+                        if (finalPosition != filter.Position) {
+                            Logger.Error($"Failed to move filter wheel to filter {filter.Name} at position {filter.Position}. Current reported position: {finalPosition}, elapsed={changeTimer.ElapsedMilliseconds}ms");
                             Notification.ShowError(string.Format(Loc.Instance["LblFilterChangeFailed"], filter.Name, filter.Position + 1));
                             throw new Exception(string.Format(Loc.Instance["LblFilterChangeFailed"], filter.Name, filter.Position + 1));
                         }
@@ -207,16 +214,18 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
                 }
             } catch (OperationCanceledException) {
                 if (token.IsCancellationRequested == true) {
+                    Logger.Info($"Filter wheel change cancelled after {changeTimer.ElapsedMilliseconds}ms");
                     throw;
-                } else {
-                    Logger.Error("Switching filter timed out after 5 Minutes");
                 }
+
+                Logger.Error($"Switching filter timed out after {filterChangeTimeout}, elapsed={changeTimer.ElapsedMilliseconds}ms");
+                throw new TimeoutException($"Filter wheel change timed out after {filterChangeTimeout}");
             } finally {
                 progress?.Report(new ApplicationStatus() { Status = string.Empty });
 
-                BroadcastFilterWheelInfo();
-                //unlock access
+                // Publish the final state only after all failure and cancellation paths clear moving.
                 FilterWheelInfo.IsMoving = false;
+                BroadcastFilterWheelInfo();
                 semaphoreSlim.Release();
             }
             return FilterWheelInfo.SelectedFilter;

@@ -178,6 +178,42 @@ namespace NINA.Test.ViewModel {
         /// This protects callers that use ChangeFilter defensively when a target filter is optional or unresolved.
         /// </summary>
         [Test]
+        public async Task ChangeFilter_WhenWheelNeverCompletes_PropagatesTimeoutFailure() {
+            FilterWheelVM vm = CreateVm(TimeSpan.FromMilliseconds(50));
+            FilterInfo luminance = new FilterInfo("L", 100, 0);
+            FilterInfo red = new FilterInfo("R", 125, 1);
+            Mock<IFilterWheel> filterWheel = CreateFilterWheel(connects: true, currentPosition: 0, luminance, red);
+            deviceChooser.SetupGet(x => x.SelectedDevice).Returns(filterWheel.Object);
+            await vm.Connect();
+            filterWheel.SetupGet(x => x.Position).Returns(-1);
+
+            Func<Task> change = () => vm.ChangeFilter(red, CancellationToken.None);
+
+            await change.Should().ThrowAsync<TimeoutException>();
+            vm.FilterWheelInfo.IsMoving.Should().BeFalse();
+        }
+
+        /// <summary>
+        /// Verifies that a caller cancellation is not swallowed as an internal timeout.
+        /// </summary>
+        [Test]
+        public async Task ChangeFilter_WhenCallerCancels_PropagatesCancellation() {
+            FilterWheelVM vm = CreateVm(TimeSpan.FromSeconds(5));
+            FilterInfo luminance = new FilterInfo("L", 100, 0);
+            FilterInfo red = new FilterInfo("R", 125, 1);
+            Mock<IFilterWheel> filterWheel = CreateFilterWheel(connects: true, currentPosition: 0, luminance, red);
+            deviceChooser.SetupGet(x => x.SelectedDevice).Returns(filterWheel.Object);
+            await vm.Connect();
+            filterWheel.SetupGet(x => x.Position).Returns(-1);
+            using CancellationTokenSource cancellation = new CancellationTokenSource();
+            Task change = vm.ChangeFilter(red, cancellation.Token);
+            cancellation.Cancel();
+
+            await FluentActions.Awaiting(() => change).Should().ThrowAsync<OperationCanceledException>();
+            vm.FilterWheelInfo.IsMoving.Should().BeFalse();
+        }
+
+        [Test]
         public async Task ChangeFilter_WithNullTarget_ReturnsCurrentFilterWithoutMovingWheel() {
             FilterWheelVM vm = CreateVm();
             FilterInfo luminance = new FilterInfo("L", 100, 0);
@@ -266,8 +302,8 @@ namespace NINA.Test.ViewModel {
             filterWheel.Verify(x => x.SendCommandBlind(":STOP#", false), Times.Once);
         }
 
-        private FilterWheelVM CreateVm() {
-            return new FilterWheelVM(profileService.Object, filterWheelMediator.Object, focuserMediator.Object, guiderMediator.Object, deviceChooser.Object, applicationStatusMediator.Object);
+        private FilterWheelVM CreateVm(TimeSpan? filterChangeTimeout = null) {
+            return new FilterWheelVM(profileService.Object, filterWheelMediator.Object, focuserMediator.Object, guiderMediator.Object, deviceChooser.Object, applicationStatusMediator.Object, filterChangeTimeout);
         }
 
         private static Mock<IFilterWheel> CreateFilterWheel(bool connects, short currentPosition, params FilterInfo[] filters) {
