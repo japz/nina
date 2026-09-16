@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright � 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -36,9 +36,12 @@ namespace NINA.Equipment.Equipment.MyFilterWheel {
         private readonly object stateLock = new object();
         public IQhySdk Sdk { get; set; }
 
-        public QHYFilterWheel(string fwheel, IProfileService profileService, IQhySdk sdk = null) {
+        public QHYFilterWheel(string fwheel, IProfileService profileService) : this(fwheel, profileService, QhySdk.Instance) {
+        }
+
+        public QHYFilterWheel(string fwheel, IProfileService profileService, IQhySdk sdk) {
             this.profileService = profileService;
-            Sdk = sdk ?? QhySdk.Instance;
+            Sdk = sdk;
 
             string FWheelId;
             var cameraModel = string.Empty;
@@ -144,7 +147,7 @@ namespace NINA.Equipment.Equipment.MyFilterWheel {
                         Logger.Error($"QHYCFW: Failed to order move to position {value} (str: {destination}), rc={rv}!");
                         moveRequested = false;
                         destinationPostition = string.Empty;
-                        return;
+                        throw new InvalidOperationException($"QHY filter wheel move to position {value} failed (SDK rc={rv})");
                     }
                 }
 

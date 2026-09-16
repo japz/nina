@@ -15,6 +15,7 @@ concurrency:
 
 env:
   BASE_COMMIT: 85b2327f1e0dd5cd34f85ad8c54d98c268bb17c6
+  EXTERNAL_COMMIT: de19c6cf64128e93ed78944ddc057ba65fb12c49
   BUILD_CONFIG: Release
 
 jobs:
@@ -27,6 +28,18 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Resolve public LFS runtime assets
+        shell: pwsh
+        run: |
+          git lfs version
+          git -C NINA/External lfs fetch origin $env:EXTERNAL_COMMIT
+          git -C NINA/External lfs checkout
+          $qhy = 'NINA/External/x64/QHYCCD/qhyccd.dll'
+          if (-not (Test-Path $qhy)) { throw "Missing public QHY runtime: $qhy" }
+          $bytes = [IO.File]::ReadAllBytes($qhy)
+          if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw 'Public QHY runtime did not resolve to a PE DLL' }
+          "QHY runtime: $qhy SHA256=$((Get-FileHash $qhy -Algorithm SHA256).Hash) bytes=$($bytes.Length)" | Out-File build-manifest.txt -Append
+
       - name: Verify pinned base and no private SDK inputs
         shell: pwsh
         run: |
@@ -34,10 +47,12 @@ jobs:
           if ($base -ne $env:BASE_COMMIT) { throw "Branch is not based on pinned nightly commit: $base" }
           if (Test-Path 'NINA/External/x64/Canon') { throw 'Restricted Canon SDK assets must not be present' }
           if (Test-Path 'NINA/External/x64/Nikon') { throw 'Restricted Nikon SDK assets must not be present' }
-          "Base commit: $env:BASE_COMMIT" | Out-File build-manifest.txt
+          $pointers = Get-ChildItem -Path NINA/External,NINA/bin -Recurse -File | Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match 'git-lfs.github.com/spec/v1' }
+          if ($pointers) { throw "Unresolved Git LFS pointer(s): $($pointers.FullName -join ', ')" }
+          "Base commit: $env:BASE_COMMIT" | Out-File build-manifest.txt -Append
+          "External commit: $env:EXTERNAL_COMMIT" | Out-File build-manifest.txt -Append
           "Diagnostic commit: $(git rev-parse HEAD)" | Out-File build-manifest.txt -Append
           "QHY SDK source: $(git hash-object NINA.Equipment/SDK/CameraSDKs/QHYSDK/QhyccdSdk.cs)" | Out-File build-manifest.txt -Append
-          "QHY SDK runtime asset: not bundled; supplied by user's installed driver" | Out-File build-manifest.txt -Append
           "Informational version: 3.3.0.1057-nightly-qhy-diagnostic" | Out-File build-manifest.txt -Append
 
       - name: Setup .NET SDK
@@ -47,6 +62,17 @@ jobs:
 
       - name: Restore NuGet packages
         run: dotnet restore NINA.sln
+
+      - name: Verify native runtime payload
+        shell: pwsh
+        run: |
+          $native = @('NINA/External/x64/QHYCCD/qhyccd.dll')
+          foreach ($path in $native) {
+            if (-not (Test-Path $path)) { throw "Missing native runtime: $path" }
+            $bytes = [IO.File]::ReadAllBytes($path)
+            if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Native runtime is not a PE DLL: $path" }
+            "Native runtime: $path SHA256=$((Get-FileHash $path -Algorithm SHA256).Hash)" | Out-File build-manifest.txt -Append
+          }
 
       - name: Build application
         run: dotnet build NINA/NINA.csproj --configuration $env:BUILD_CONFIG --no-restore -p:Platform=x64

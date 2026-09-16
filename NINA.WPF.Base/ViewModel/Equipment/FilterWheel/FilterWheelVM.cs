@@ -47,9 +47,17 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
                              IFocuserMediator focuserMediator,
                              IGuiderMediator guiderMediator,
                              IDeviceChooserVM filterWheelChooserVM,
+                             IApplicationStatusMediator applicationStatusMediator) : this(profileService, filterWheelMediator, focuserMediator, guiderMediator, filterWheelChooserVM, applicationStatusMediator, TimeSpan.FromMinutes(5)) {
+        }
+
+        public FilterWheelVM(IProfileService profileService,
+                             IFilterWheelMediator filterWheelMediator,
+                             IFocuserMediator focuserMediator,
+                             IGuiderMediator guiderMediator,
+                             IDeviceChooserVM filterWheelChooserVM,
                              IApplicationStatusMediator applicationStatusMediator,
-                             TimeSpan? filterChangeTimeout = null) : base(profileService) {
-            this.filterChangeTimeout = filterChangeTimeout ?? TimeSpan.FromMinutes(5);
+                             TimeSpan filterChangeTimeout) : base(profileService) {
+            this.filterChangeTimeout = filterChangeTimeout;
             Title = Loc.Instance["LblFilterWheel"];
             ImageGeometry = (System.Windows.Media.GeometryGroup)System.Windows.Application.Current.Resources["FWSVG"];
             HasSettings = true;
@@ -179,14 +187,20 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
                             do {
                                 await Task.Delay(500, timeoutCts.Token);
                             } while (FW.Position == -1);
-                        });
+                        }, timeoutCts.Token);
                         progress?.Report(new ApplicationStatus() { Status = Loc.Instance["LblSwitchingFilter"] });
 
-                        if (changeFocus != null) {
-                            await changeFocus;
-                        }
+                        try {
+                            if (changeFocus != null) {
+                                await changeFocus;
+                            }
 
-                        await changeFilter;
+                            await changeFilter;
+                        } catch {
+                            timeoutCts.Cancel();
+                            try { await changeFilter; } catch (OperationCanceledException) { }
+                            throw;
+                        }
 
                         short finalPosition = FW?.Position ?? -1;
                         Logger.Debug($"Filter wheel change completed: requested={filter.Position}, reported={finalPosition}, elapsed={changeTimer.ElapsedMilliseconds}ms");
