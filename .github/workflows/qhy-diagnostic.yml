@@ -16,6 +16,8 @@ concurrency:
 env:
   BASE_COMMIT: 85b2327f1e0dd5cd34f85ad8c54d98c268bb17c6
   EXTERNAL_COMMIT: de19c6cf64128e93ed78944ddc057ba65fb12c49
+  QHY_SDK_VERSION: 25-9-29-10
+  QHY_DLL_SHA256: 7e0304fd56e2db77ff7e04253b160bb48733ab0ee3eae88798d0e4f1cafda0f3
   BUILD_CONFIG: Release
 
 jobs:
@@ -32,13 +34,20 @@ jobs:
         shell: pwsh
         run: |
           git lfs version
+          git remote add upstream https://github.com/isbeorn/nina.git
           git -C NINA/External lfs fetch origin $env:EXTERNAL_COMMIT
           git -C NINA/External lfs checkout
+          git lfs fetch upstream $env:BASE_COMMIT --include='NINA/Utility/ExifTool/exiftool.exe'
+          git lfs checkout NINA/Utility/ExifTool/exiftool.exe
           $qhy = 'NINA/External/x64/QHYCCD/qhyccd.dll'
           if (-not (Test-Path $qhy)) { throw "Missing public QHY runtime: $qhy" }
           $bytes = [IO.File]::ReadAllBytes($qhy)
           if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw 'Public QHY runtime did not resolve to a PE DLL' }
-          "QHY runtime: $qhy SHA256=$((Get-FileHash $qhy -Algorithm SHA256).Hash) bytes=$($bytes.Length)" | Out-File build-manifest.txt -Append
+          $qhyHash = (Get-FileHash $qhy -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($qhyHash -ne $env:QHY_DLL_SHA256) { throw "Unexpected QHY runtime hash: $qhyHash" }
+          "QHY runtime: $qhy SHA256=$qhyHash bytes=$($bytes.Length)" | Out-File build-manifest.txt -Append
+          "QHY SDK version: $env:QHY_SDK_VERSION" | Out-File build-manifest.txt -Append
+          "QHY SDK payload hash: $env:QHY_DLL_SHA256" | Out-File build-manifest.txt -Append
 
       - name: Verify pinned base and no private SDK inputs
         shell: pwsh
@@ -54,6 +63,7 @@ jobs:
           "Diagnostic commit: $(git rev-parse HEAD)" | Out-File build-manifest.txt -Append
           "QHY SDK source: $(git hash-object NINA.Equipment/SDK/CameraSDKs/QHYSDK/QhyccdSdk.cs)" | Out-File build-manifest.txt -Append
           "Informational version: 3.3.0.1057-nightly-qhy-diagnostic" | Out-File build-manifest.txt -Append
+          "Installed QHY DLL equivalence: not verified (public payload is pinned and hash-verified)" | Out-File build-manifest.txt -Append
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -83,6 +93,17 @@ jobs:
       - name: Run focused QHY and filter VM tests
         run: dotnet test NINA.Test/NINA.Test.csproj --configuration Debug --no-build -p:PlatformTarget=x64 --filter "FullyQualifiedName~QHYFilterWheelTest|FullyQualifiedName~FilterWheelVMTest" --logger "trx;LogFileName=qhy-diagnostic.trx" --results-directory TestResults
 
+      - name: Record focused test results
+        shell: pwsh
+        run: |
+          [xml]$trx = Get-Content TestResults/qhy-diagnostic.trx
+          $results = @($trx.TestRun.Results.UnitTestResult)
+          $passed = @($results | Where-Object Outcome -eq 'Passed').Count
+          $failed = @($results | Where-Object Outcome -eq 'Failed').Count
+          $skipped = @($results | Where-Object Outcome -eq 'NotExecuted').Count
+          "Focused tests: $($results.Count) total, $passed passed, $failed failed, $skipped skipped" | Out-File build-manifest.txt -Append
+          if ($failed -ne 0 -or $skipped -ne 0) { throw 'Focused diagnostic tests did not all pass' }
+
       - name: Create portable diagnostic archive
         shell: pwsh
         run: |
@@ -91,6 +112,8 @@ jobs:
           New-Item -ItemType Directory -Force $staging | Out-Null
           Copy-Item "$source/*" $staging -Recurse -Force
           Copy-Item build-manifest.txt $staging -Force
+          $pointers = Get-ChildItem $staging -Recurse -File | Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match 'git-lfs.github.com/spec/v1' }
+          if ($pointers) { throw "Unresolved Git LFS pointer(s) in final package: $($pointers.FullName -join ', ')" }
           Compress-Archive -Path "$staging/*" -DestinationPath 'NINA-QHY-diagnostic.zip' -Force
           Get-FileHash NINA-QHY-diagnostic.zip -Algorithm SHA256 | Format-List | Out-File NINA-QHY-diagnostic.sha256
 

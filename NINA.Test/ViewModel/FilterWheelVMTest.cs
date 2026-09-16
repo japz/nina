@@ -137,6 +137,30 @@ namespace NINA.Test.ViewModel {
             vm.FilterWheelInfo.Connected.Should().BeFalse();
         }
 
+        [Test]
+        public async Task ChangeFilter_WhenWheelRejectsMove_CancelsStartedFocusTask() {
+            FilterWheelVM vm = CreateVm();
+            FilterInfo luminance = new FilterInfo("L", 100, 0);
+            FilterInfo red = new FilterInfo("R", 125, 1);
+            Mock<IFilterWheel> filterWheel = CreateFilterWheel(connects: true, currentPosition: 0, luminance, red);
+            focuserSettings.Object.UseFilterWheelOffsets = true;
+            deviceChooser.SetupGet(x => x.SelectedDevice).Returns(filterWheel.Object);
+            await vm.Connect();
+
+            TaskCompletionSource<int> focusCompletion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            focuserMediator.Setup(x => x.MoveFocuserRelative(25, It.IsAny<CancellationToken>())).Returns((int _, CancellationToken token) => {
+                token.Register(() => focusCompletion.TrySetCanceled(token));
+                return focusCompletion.Task;
+            });
+            filterWheel.SetupSet(x => x.Position = 1).Callback(() => throw new InvalidOperationException("move rejected"));
+
+            Func<Task> change = () => vm.ChangeFilter(red, CancellationToken.None);
+
+            await change.Should().ThrowAsync<InvalidOperationException>();
+            await FluentActions.Awaiting(() => focusCompletion.Task).Should().ThrowAsync<OperationCanceledException>();
+            vm.FilterWheelInfo.IsMoving.Should().BeFalse();
+        }
+
         /// <summary>
         /// Verifies that changing filters applies the driver position, reports the from/to filter transition,
         /// moves the focuser by the profile offset delta, and resumes guiding when this VM stopped it.

@@ -47,6 +47,46 @@ namespace NINA.Test.Equipment {
             wheel.Position.Should().Be(1);
         }
 
+        [Test]
+        public async Task Position_ConcurrentSdkReads_AreSerialized() {
+            int calls = 0;
+            int activeCalls = 0;
+            int maximumActiveCalls = 0;
+            using ManualResetEventSlim firstCallEntered = new ManualResetEventSlim();
+            using ManualResetEventSlim releaseFirstCall = new ManualResetEventSlim();
+            Mock<IQhySdk> sdk = CreateSdk(() => "0");
+            sdk.Setup(x => x.GetCfwStatus(It.IsAny<byte[]>())).Callback<byte[]>(buffer => {
+                int call = Interlocked.Increment(ref calls);
+                int active = Interlocked.Increment(ref activeCalls);
+                int previousMaximum;
+                do {
+                    previousMaximum = maximumActiveCalls;
+                    if (active <= previousMaximum) {
+                        break;
+                    }
+                } while (Interlocked.CompareExchange(ref maximumActiveCalls, active, previousMaximum) != previousMaximum);
+
+                if (call == 1) {
+                    firstCallEntered.Set();
+                    releaseFirstCall.Wait();
+                }
+
+                buffer[0] = (byte)'0';
+                Interlocked.Decrement(ref activeCalls);
+            }).Returns(QhySdk.QHYCCD_SUCCESS);
+            QHYFilterWheel wheel = CreateWheel(sdk);
+
+            Task<short> firstRead = Task.Run(() => wheel.Position);
+            firstCallEntered.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
+            Task<short> secondRead = Task.Run(() => wheel.Position);
+            await Task.Delay(100);
+
+            calls.Should().Be(1);
+            releaseFirstCall.Set();
+            await Task.WhenAll(firstRead, secondRead);
+            maximumActiveCalls.Should().Be(1);
+        }
+
         private static QHYFilterWheel CreateWheel(Mock<IQhySdk> sdk) {
             Mock<IProfileService> profileService = new Mock<IProfileService>();
             return new QHYFilterWheel("camera", profileService.Object, sdk.Object);

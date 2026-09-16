@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -158,6 +158,7 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
                         Logger.Info($"Moving to Filter {filter.Name} at Position {filter.Position}");
                         FilterWheelInfo.IsMoving = true;
                         Task changeFocus = null;
+                        Task changeFilter = null;
                         bool activeGuidingStopped = false;
                         if (profileService.ActiveProfile.FocuserSettings.UseFilterWheelOffsets) {
                             if (prevFilter != null) {
@@ -182,15 +183,16 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
                             }
                         }
 
-                        FW.Position = filter.Position;
-                        var changeFilter = Task.Run(async () => {
-                            do {
-                                await Task.Delay(500, timeoutCts.Token);
-                            } while (FW.Position == -1);
-                        }, timeoutCts.Token);
-                        progress?.Report(new ApplicationStatus() { Status = Loc.Instance["LblSwitchingFilter"] });
-
                         try {
+                            // Own every task started before command submission can fail, including focus movement.
+                            FW.Position = filter.Position;
+                            changeFilter = Task.Run(async () => {
+                                do {
+                                    await Task.Delay(500, timeoutCts.Token);
+                                } while (FW.Position == -1);
+                            }, timeoutCts.Token);
+                            progress?.Report(new ApplicationStatus() { Status = Loc.Instance["LblSwitchingFilter"] });
+
                             if (changeFocus != null) {
                                 await changeFocus;
                             }
@@ -198,7 +200,12 @@ namespace NINA.WPF.Base.ViewModel.Equipment.FilterWheel {
                             await changeFilter;
                         } catch {
                             timeoutCts.Cancel();
-                            try { await changeFilter; } catch (OperationCanceledException) { }
+                            if (changeFocus != null) {
+                                try { await changeFocus; } catch { }
+                            }
+                            if (changeFilter != null) {
+                                try { await changeFilter; } catch { }
+                            }
                             throw;
                         }
 
