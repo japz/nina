@@ -52,10 +52,10 @@ jobs:
         run: dotnet build NINA/NINA.csproj --configuration $env:BUILD_CONFIG --no-restore -p:Platform=x64
 
       - name: Build tests
-        run: dotnet build NINA.Test/NINA.Test.csproj --configuration $env:BUILD_CONFIG --no-restore -p:Platform=x64
+        run: dotnet build NINA.Test/NINA.Test.csproj --configuration Debug --no-restore -p:Platform=x64
 
       - name: Run focused QHY and filter VM tests
-        run: dotnet test NINA.Test/NINA.Test.csproj --configuration $env:BUILD_CONFIG --no-build -p:PlatformTarget=x64 --filter "FullyQualifiedName~QHYFilterWheelTest|FullyQualifiedName~FilterWheelVMTest" --logger "trx;LogFileName=qhy-diagnostic.trx" --results-directory TestResults
+        run: dotnet test NINA.Test/NINA.Test.csproj --configuration Debug --no-build -p:PlatformTarget=x64 --filter "FullyQualifiedName~QHYFilterWheelTest|FullyQualifiedName~FilterWheelVMTest" --logger "trx;LogFileName=qhy-diagnostic.trx" --results-directory TestResults
 
       - name: Create portable diagnostic archive
         shell: pwsh
