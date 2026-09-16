@@ -303,7 +303,7 @@ namespace NINA.Test.ViewModel {
         }
 
         private FilterWheelVM CreateVm(TimeSpan? filterChangeTimeout = null) {
-            return new FilterWheelVM(profileService.Object, filterWheelMediator.Object, focuserMediator.Object, guiderMediator.Object, deviceChooser.Object, applicationStatusMediator.Object, filterChangeTimeout);
+            return new FilterWheelVM(profileService.Object, filterWheelMediator.Object, focuserMediator.Object, guiderMediator.Object, deviceChooser.Object, applicationStatusMediator.Object, filterChangeTimeout ?? TimeSpan.FromMinutes(5));
         }
 
         private static Mock<IFilterWheel> CreateFilterWheel(bool connects, short currentPosition, params FilterInfo[] filters) {
