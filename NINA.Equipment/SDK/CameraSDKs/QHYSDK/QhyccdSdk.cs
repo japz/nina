@@ -253,15 +253,19 @@ namespace QHYCCD {
         }
 
         public bool IsCfwPlugged() {
-            if (IsQHYCCDCFWPlugged(handle) == QHYCCD_SUCCESS) {
-                return true;
-            }
+            lock (lockobj) {
+                if (IsQHYCCDCFWPlugged(handle) == QHYCCD_SUCCESS) {
+                    return true;
+                }
 
-            return false;
+                return false;
+            }
         }
 
         public uint GetCfwStatus(byte[] status) {
-            return GetQHYCCDCFWStatus(handle, status);
+            lock (lockobj) {
+                return GetQHYCCDCFWStatus(handle, status);
+            }
         }
 
         public uint SendOrderToCfw(string order, int length) {
